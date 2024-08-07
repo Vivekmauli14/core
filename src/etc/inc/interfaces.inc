@@ -918,11 +918,54 @@ function interfaces_ptpid_next()
     return $ptpid;
 }
 
-function interface_ppps_bound($interface)
+function interface_ppps_bound($interface, $family = null)
 {
     global $config;
 
-    return !empty($config['interfaces'][$interface]['dhcp6usev4iface']);
+    $ifcfg = $config['interfaces'][$interface] ?? null;
+    $ppps = $config['ppps']['ppp'] ?? null;
+    $bound = false;
+
+    if (!interface_ppps_capable($ifcfg, $ppps)) {
+        return $bound;
+    }
+
+    $ipv4_mode = false;
+    $ipv6_mode = false;
+
+    switch ($ifcfg['ipaddr'] ?? 'none') {
+        case 'ppp':
+        case 'pppoe':
+        case 'pptp':
+        case 'l2tp':
+            $ipv4_mode = true;
+            break;
+        default:
+            break;
+    }
+
+    switch ($ifcfg['ipaddrv6'] ?? 'none') {
+        case 'dhcp6':
+        case 'pppoev6':
+        case 'slaac':
+            $ipv6_mode = true;
+            break;
+        default:
+            break;
+    }
+
+    if ($family == 4) {
+        /* use this to steer configuration based on newwanip event */
+        $ret = $ipv4_mode;
+    } else if ($family == 6) {
+        /* use this to steer configuration based on newwanipv6 event */
+        $ret = !$ipv4_mode && $ipv6_mode;
+    } else {
+        /* use this to prevent doing any early setup in general */
+        $ret = $ipv4_mode || $ipv6_mode;
+    }
+
+    return $ret;
 }
 
 function interface_ppps_capable($ifcfg, $ppps)
@@ -971,7 +1014,7 @@ function interface_ppps_configure($interface)
     }
 
     if (!isset($ifcfg['enable'])) {
-        return;
+        return false;
     }
 
     $ipv4_mode = false;
@@ -3609,24 +3652,6 @@ function get_real_interface($interface = 'wan', $family = 'all')
                     case '6rd':
                     case '6to4':
                         $realif = "{$interface}_stf";
-                        break;
-                    case 'dhcp6':
-                    case 'slaac':
-                    case 'staticv6':
-                        if (interface_ppps_bound($interface)) { /* XXX remove */
-                            /* keep preset as requested */
-                            break;
-                        }
-                        switch ($cfg['ipaddr'] ?? 'none') {
-                            case 'l2tp':
-                            case 'pppoe':
-                            case 'pptp':
-                                /* except for "ppp" all have parent interfaces */
-                                $realif = get_ppp_parent($realif);
-                                break;
-                            default:
-                                break;
-                        }
                         break;
                     default:
                         break;
