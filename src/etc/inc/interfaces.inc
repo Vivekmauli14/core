@@ -1048,12 +1048,10 @@ function interface_ppps_configure($interface)
     /* for IPv6 we need the mode to render in the configuration */
     $ipv6_mode = $ipv6_mode ? 'enable' : 'disable';
 
-    $pppid = null; /* XXX probably used wrong */
     $ppp = null;
 
-    foreach ($ppps as $tempid => $temp) {
+    foreach ($ppps as $temp) {
         if ($ifcfg['if'] == $temp['if']) {
-            $pppid = $tempid;
             $ppp = $temp;
             break;
         }
@@ -1163,16 +1161,8 @@ EOD;
 
     if ($ipv4_mode) {
         if ($ppp['type'] == 'ppp') {
-            if (is_ipaddr($ppp['localip'])) {
-                $localip = $ppp['localip'];
-            } else {
-                $localip = '0.0.0.0';
-            }
-            if (is_ipaddr($ppp['gateway'])) {
-                $gateway = $ppp['gateway'];
-            } else {
-                $gateway = "10.64.64.{$pppid}";
-            }
+            $localip = is_ipaddr($ppp['localip']) ? $ppp['localip'] : '0.0.0.0';
+            $gateway = is_ipaddr($ppp['gateway']) ? $ppp['gateway'] : '0.0.0.0';
             $mpdconf .= "  set ipcp ranges {$localip}/0 {$gateway}/0\n";
         } else {
             $mpdconf .= "  set ipcp ranges 0.0.0.0/0 0.0.0.0/0\n";
