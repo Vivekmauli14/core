@@ -99,31 +99,20 @@ interfaces_vips_configure($interface, 6);
 $greifs = link_interface_to_gre($interface, true, 6);
 $gififs = link_interface_to_gif($interface, true, 6);
 
-/*
- * XXX We would like to discourage SLAAC addressing here but
- * in reality this is highly ISP dependent and the kernel is
- * not forthcoming in the quest as it likes to prefer this because
- * it came first breaking some setups but making others work at
- * the same time making it impractical to infer which setup we
- * currently require.
- */
-switch (isset($config['system']['ipv6allow']) ? ($config['interfaces'][$interface]['ipaddrv6'] ?? 'none') : 'none') {
-    case 'dhcp6':
+switch ($config['interfaces'][$interface]['ipaddrv6'] ?? 'none') {
     case 'slaac':
-        if (interface_ppps_bound($interface, 6)) {
-            interface_dhcpv6_prepare($interface, $config['interfaces'][$interface]);
-            interface_dhcpv6_configure($interface, $config['interfaces'][$interface]);
-        }
-        if ($config['interfaces'][$interface]['ipaddrv6'] == 'slaac') {
-            /* require immediate reconfiguration before reconfiguring clients */
-            plugins_configure('dhcp', false, ['inet6']);
-        }
+        /* require immediate reconfiguration before reconfiguring clients */
+        plugins_configure('dhcp', false, ['inet6']);
         break;
-   default:
-        if (interface_ppps_bound($interface, 6)) {
-            interface_static6_configure($interface, $config['interfaces'][$interface]);
-            system_routing_configure(false, $interface, true, 'inet6');
-        }
+    default:
+        /*
+         * XXX We would like to discourage SLAAC addressing here but
+         * in reality this is highly ISP dependent and the kernel is
+         * not forthcoming in the quest as it likes to prefer this because
+         * it came first breaking some setups but making others work at
+         * the same time making it impractical to infer which setup we
+         * currently require.
+         */
         break;
 }
 
