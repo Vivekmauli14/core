@@ -852,24 +852,10 @@ function interface_reset($interface, $ifacecfg = false, $suspend = false)
         }
     }
 
+    /* check reset of running PPP configuration inside function */
+    interface_ppps_reset($interface, $suspend, $ifcfg, $ppps);
+
     switch ($ifcfg['ipaddr'] ?? 'none') {
-        case 'ppp':
-        case 'pppoe':
-        case 'pptp':
-        case 'l2tp':
-            if (!empty($ppps)) {
-                foreach ($ppps as $ppp) {
-                    if ($ifcfg['if'] == $ppp['if']) {
-                        if (isset($ppp['ondemand']) && $suspend) {
-                            configdp_run('interface reconfigure', [$interface], true);
-                        } else {
-                            killbypid("/var/run/{$ppp['type']}_{$interface}.pid");
-                        }
-                        break;
-                    }
-                }
-            }
-            break;
         case 'dhcp':
             killbypid("/var/run/dhclient.{$realif}.pid");
             break;
@@ -932,35 +918,100 @@ function interfaces_ptpid_next()
     return $ptpid;
 }
 
-/*
- * This function can configure PPPoE, MLPPP (PPPoE), PPTP.
- * It writes the mpd config file to /var/etc every time the link is opened.
- */
+function interface_ppps_capable($ifcfg, $ppps)
+{
+    if (empty($ifcfg) || empty($ppps)) {
+        return false;
+    }
+
+    foreach ($ppps as $ppp) {
+        if ($ifcfg['if'] == $ppp['if']) {
+            /* we only test for PPP capability that needs mpd5 */
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function interface_ppps_reset($interface, $suspend, $ifcfg, $ppps)
+{
+    if (!interface_ppps_capable($ifcfg, $ppps)) {
+        return;
+    }
+
+    foreach ($ppps as $ppp) {
+        if ($ifcfg['if'] == $ppp['if']) {
+            if (isset($ppp['ondemand']) && $suspend) {
+                configdp_run('interface reconfigure', [$interface], true);
+            } else {
+                killbypid("/var/run/{$ppp['type']}_{$interface}.pid");
+            }
+            break;
+        }
+    }
+}
+
 function interface_ppps_configure($interface)
 {
     global $config;
 
-    /* Return for unassigned interfaces. This is a minimum requirement. */
-    if (empty($config['interfaces'][$interface])) {
+    $ifcfg = $config['interfaces'][$interface] ?? null;
+    $ppps = $config['ppps']['ppp'] ?? null;
+
+    if (!interface_ppps_capable($ifcfg, $ppps)) {
         return;
     }
-    $ifcfg = $config['interfaces'][$interface];
+
     if (!isset($ifcfg['enable'])) {
         return;
     }
 
-    // mpd5 modem chat script expected in the same directory as the mpd_xxx.conf files
-    @copy('/usr/local/opnsense/scripts/interfaces/mpd.script', '/var/etc/mpd.script');
+    $ipv4_mode = false;
+    $ipv6_mode = false;
 
-    if (isset($config['ppps']['ppp'])) {
-        foreach ($config['ppps']['ppp'] as $pppid => $ppp) {
-            if ($ifcfg['if'] == $ppp['if']) {
-                break;
-            }
+    switch ($ifcfg['ipaddr'] ?? 'none') {
+        case 'ppp':
+        case 'pppoe':
+        case 'pptp':
+        case 'l2tp':
+            $ipv4_mode = true;
+            break;
+        default:
+            break;
+    }
+
+    switch ($ifcfg['ipaddrv6'] ?? 'none') {
+        case 'dhcp6':
+        case 'pppoev6':
+        case 'slaac':
+            $ipv6_mode = true;
+            break;
+        default:
+            break;
+    }
+
+    if (!$ipv4_mode && !$ipv6_mode) {
+        return;
+    }
+
+    /* for IPv6 we need the mode to render in the configuration */
+    $ipv6_mode = $ipv6_mode ? 'enable' : 'disable';
+
+    $pppid = null; /* XXX probably used wrong */
+    $ppp = null;
+
+    foreach ($ppps as $tempid => $temp) {
+        if ($ifcfg['if'] == $temp['if']) {
+            $pppid = $tempid;
+            $ppp = $temp;
+            break;
         }
     }
-    if (!isset($ppp) || $ifcfg['if'] != $ppp['if']) {
-        log_msg("Can't find PPP config for {$ifcfg['if']} in interface_ppps_configure().", LOG_ERR);
+
+     /* XXX since interface_ppps_capable() verified this it is likely spurious to check */
+    if (empty($ppp)) {
+        log_msg("interface_ppps_configure() cannot find PPP config for device {$ifcfg['if']}", LOG_ERR);
         return;
     }
 
@@ -973,6 +1024,7 @@ function interface_ppps_configure($interface)
             }
         }
     }
+
     $localips = isset($ppp['localip']) ? explode(',', $ppp['localip']) : [];
     $gateways = isset($ppp['gateway']) ? explode(',', $ppp['gateway']) : [];
     $subnets = isset($ppp['subnet']) ? explode(',', $ppp['subnet']) : [];
@@ -1019,19 +1071,6 @@ function interface_ppps_configure($interface)
         }
     }
 
-    $ipv6_mode = 'disable';
-
-    switch ($ifcfg['ipaddrv6'] ?? 'none') {
-        /* XXX should be limited to 'pppoev6' match but some ISPs seem to require both racing away */
-        case 'dhcp6':
-        case 'pppoev6':
-        case 'slaac':
-            $ipv6_mode = 'enable';
-            break;
-        default:
-            break;
-    }
-
     // Construct the mpd.conf file
     $mpdconf = <<<EOD
 startup:
@@ -1071,20 +1110,23 @@ EOD;
 
     $mpdconf .= "  set iface up-script /usr/local/opnsense/scripts/interfaces/ppp-linkup.sh\n";
     $mpdconf .= "  set iface down-script /usr/local/opnsense/scripts/interfaces/ppp-linkdown.sh\n";
-    if ($ppp['type'] == "ppp") {
-        if (is_ipaddr($ppp['localip'])) {
-            $localip = $ppp['localip'];
+
+    if ($ipv4_mode) {
+        if ($ppp['type'] == 'ppp') {
+            if (is_ipaddr($ppp['localip'])) {
+                $localip = $ppp['localip'];
+            } else {
+                $localip = '0.0.0.0';
+            }
+            if (is_ipaddr($ppp['gateway'])) {
+                $gateway = $ppp['gateway'];
+            } else {
+                $gateway = "10.64.64.{$pppid}";
+            }
+            $mpdconf .= "  set ipcp ranges {$localip}/0 {$gateway}/0\n";
         } else {
-            $localip = '0.0.0.0';
+            $mpdconf .= "  set ipcp ranges 0.0.0.0/0 0.0.0.0/0\n";
         }
-        if (is_ipaddr($ppp['gateway'])) {
-            $gateway = $ppp['gateway'];
-        } else {
-            $gateway = "10.64.64.{$pppid}";
-        }
-        $mpdconf .= "  set ipcp ranges {$localip}/0 {$gateway}/0\n";
-    } else {
-        $mpdconf .= "  set ipcp ranges 0.0.0.0/0 0.0.0.0/0\n";
     }
 
     if (isset($ppp['vjcomp'])) {
@@ -1095,6 +1137,7 @@ EOD;
         $mpdconf .= "  set ipcp enable req-pri-dns\n";
         $mpdconf .= "  set ipcp enable req-sec-dns\n";
     }
+
     foreach ($ports as $pid => $port) {
         $mpdconf_arr = [];
         $port = get_real_interface($port);
@@ -1208,21 +1251,16 @@ EOD;
         $mpdconf .= "\topen\n";
     }
 
-    $fd = fopen("/var/etc/mpd_{$interface}.conf", "w");
-    if (!$fd) {
-        log_msg("Error: cannot open mpd_{$interface}.conf in interface_ppps_configure().", LOG_ERR);
-        return;
-    }
-
-    // Write out mpd_ppp.conf
-    fwrite($fd, $mpdconf);
-    fclose($fd);
-    unset($mpdconf);
-
     /* stop the service as a precaution */
     killbypid("/var/run/{$ppp['type']}_{$interface}.pid");
 
-    // Create the uptime log if requested and if it doesn't exist already, or delete it if it is no longer requested.
+    /* mpd5 modem chat script expected in the same directory as the mpd_xxx.conf files */
+    @copy('/usr/local/opnsense/scripts/interfaces/mpd.script', '/var/etc/mpd.script');
+
+    /* write the configuration */
+    @file_put_contents("/var/etc/mpd_{$interface}.conf", $mpdconf);
+
+    /* create the uptime log if requested */
     if (isset($ppp['uptime'])) {
         @touch("/conf/{$ifcfg['if']}.log");
     } else {
@@ -2218,19 +2256,8 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
     $realif = get_real_interface($interface);
     $realifv6 = get_real_interface($interface, 'inet6');
 
-    switch ($wancfg['ipaddr'] ?? 'none') {
-        case 'l2tp':
-        case 'ppp':
-        case 'pppoe':
-        case 'pptp':
-            /* hardware device underneath software node */
-            $realhwif = get_ppp_parent($realif);
-            break;
-        default:
-            /* hardware device remains a hardware device */
-            $realhwif = $realif;
-            break;
-    }
+    /* XXX nicer than before but too many internals */
+    $realhwif = interface_ppps_capable($wancfg, $config['ppps']['ppp'] ?? null) ? get_ppp_parent($realif) : $realif;
 
     if ($reload) {
         foreach (plugins_devices() as $device) {
@@ -2343,12 +2370,6 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
         case 'dhcp':
             interface_dhcp_configure($interface);
             break;
-        case 'l2tp':
-        case 'ppp':
-        case 'pppoe':
-        case 'pptp':
-            interface_ppps_configure($interface);
-            break;
         default:
             interface_static_configure($interface, $wancfg);
             break;
@@ -2392,6 +2413,9 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
             }
             break;
     }
+
+    /* since the connectivity can include IPv4 and/or IPv6 let the function decide */
+    interface_ppps_configure($interface);
 
     /*
      * In most cases the IPv6 device is the same as IPv4.

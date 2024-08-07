@@ -816,11 +816,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     }
                 }
                 break;
-            case 'pppoev6':
-                if ($pconfig['type'] != 'pppoe') {
-                    $input_errors[] = gettext('IPv6 PPPoE mode requires PPPoE IPv4 mode.');
-                }
-                break;
         }
 
         /* normalize MAC addresses - lowercase and convert Windows-ized hyphenated MACs to colon delimited */
