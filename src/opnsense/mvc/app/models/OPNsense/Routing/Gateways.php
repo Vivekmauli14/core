@@ -275,7 +275,7 @@ class Gateways extends BaseModel
                 case 'dhcp6':
                 case 'slaac':
                 case 'staticv6':
-                    if (isset($ifcfg['dhcp6usev4iface'])) {
+                    if (isset($ifcfg['dhcp6usev4iface'])) { /* XXX remove */
                         break;
                     }
                     switch ($ifcfg['ipaddr'] ?? 'none') {

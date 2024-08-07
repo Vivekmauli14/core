@@ -918,6 +918,13 @@ function interfaces_ptpid_next()
     return $ptpid;
 }
 
+function interface_ppps_bound($interface)
+{
+    global $config;
+
+    return !empty($config['interfaces'][$interface]['dhcp6usev4iface']);
+}
+
 function interface_ppps_capable($ifcfg, $ppps)
 {
     if (empty($ifcfg) || empty($ppps)) {
@@ -2393,7 +2400,7 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
         case 'dhcp6':
             mwexecf('/sbin/ifconfig %s inet6 accept_rtadv -ifdisabled up', $realifv6);
 
-            if (!isset($wancfg['dhcp6usev4iface'])) {
+            if (!interface_ppps_bound($interface)) {
                 interface_dhcpv6_prepare($interface, $wancfg);
                 interface_dhcpv6_configure($interface, $wancfg);
             }
@@ -2408,7 +2415,7 @@ function interface_configure($verbose = false, $interface = 'wan', $reload = fal
             interface_track6_configure($interface, $wancfg, $reload || $linkup);
             break;
         default:
-            if (!isset($wancfg['dhcp6usev4iface'])) {
+            if (!interface_ppps_bound($interface)) {
                 interface_static6_configure($interface, $wancfg);
             }
             break;
@@ -3606,7 +3613,7 @@ function get_real_interface($interface = 'wan', $family = 'all')
                     case 'dhcp6':
                     case 'slaac':
                     case 'staticv6':
-                        if (isset($cfg['dhcp6usev4iface'])) {
+                        if (interface_ppps_bound($interface)) { /* XXX remove */
                             /* keep preset as requested */
                             break;
                         }
